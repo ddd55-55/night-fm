@@ -1,0 +1,15 @@
+{
+  "name": "night-fm",
+  "version": "1.0.0",
+  "description": "Night FM - 在线音乐播放器",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.10.0",
+    "cors": "^2.8.6",
+    "NeteaseCloudMusicApi": "^4.32.0"
+  }
+}

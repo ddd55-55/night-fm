@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Night FM - 深夜电台</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎧</text></svg>">
+</head>
+<body>
+    <!-- 背景粒子 -->
+    <div class="bg-particles" id="particles"></div>
+
+    <!-- 弹窗遮罩 -->
+    <div class="modal-overlay" id="authModal" style="display:none">
+        <div class="modal">
+            <button class="modal-close" id="closeAuth">✕</button>
+            <h2 class="modal-title" id="authTitle">登录</h2>
+            <div class="form-group">
+                <input type="text" id="authUsername" placeholder="用户名" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <input type="password" id="authPassword" placeholder="密码" autocomplete="current-password">
+            </div>
+            <button class="btn-primary full-width" id="authSubmit">登录</button>
+            <p class="auth-switch">
+                <span id="authSwitchText">没有账号？</span>
+                <a href="#" id="authSwitch">去注册</a>
+            </p>
+            <p class="auth-error" id="authError" style="display:none"></p>
+        </div>
+    </div>
+
+    <!-- 顶部导航 -->
+    <nav class="navbar">
+        <div class="nav-brand">🎧 Night FM</div>
+        <div class="nav-links">
+            <a href="#" class="nav-link active" data-page="home">首页</a>
+            <a href="#" class="nav-link" data-page="discover">发现</a>
+            <a href="#" class="nav-link" data-page="favorites">收藏</a>
+            <a href="#" class="nav-link" data-page="admin" id="adminLink" style="display:none">后台</a>
+        </div>
+        <div class="nav-user">
+            <span id="userInfo" style="display:none">
+                <span id="userName">用户</span>
+                <button class="btn-small" id="logoutBtn">退出</button>
+            </span>
+            <button class="btn-small" id="loginBtn">登录</button>
+        </div>
+    </nav>
+
+    <!-- 页面容器 -->
+    <div class="page-container">
+
+        <!-- ====== 首页：播放器 ====== -->
+        <div class="page active" id="pageHome">
+            <div class="player-container">
+                <!-- 左侧封面 -->
+                <div class="cover-section">
+                    <div class="cover-wrapper" id="coverWrapper">
+                        <img src="covers/chill-ambient.png" alt="封面" id="coverImg">
+                        <div class="cover-overlay">
+                            <div class="equalizer" id="equalizer">
+                                <span></span><span></span><span></span><span></span><span></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="track-info">
+                        <h2 class="track-title" id="trackTitle">Chill Ambient</h2>
+                        <p class="track-artist" id="trackArtist">Night FM</p>
+                    </div>
+                    <div class="lyric-panel" id="lyricPanel">
+                        <p class="lyric-line">🎵 纯音乐 — 享受旋律吧</p>
+                    </div>
+                </div>
+
+                <!-- 右侧控制 -->
+                <div class="control-section">
+                    <div class="tabs">
+                        <button class="tab active" data-ptab="local">💿 本地曲库</button>
+                        <button class="tab" data-ptab="online">🌐 网易云搜索</button>
+                    </div>
+
+                    <div class="search-bar" id="searchBar" style="display:none">
+                        <input type="text" id="searchInput" placeholder="搜歌名、歌手、专辑...">
+                        <button id="searchBtn">🔍</button>
+                    </div>
+
+                    <div class="playlist tab-ptab" id="tabLocal">
+                        <ul id="localPlaylist">
+                            <li class="playlist-item active" data-type="local" data-index="0">
+                                <img src="covers/chill-ambient.png" alt="">
+                                <div class="item-info">
+                                    <span class="item-title">Chill Ambient 🌊</span>
+                                    <span class="item-artist">舒缓氛围 · 放松</span>
+                                </div>
+                                <span class="item-duration">1:04</span>
+                            </li>
+                            <li class="playlist-item" data-type="local" data-index="1">
+                                <img src="covers/upbeat-energetic.png" alt="">
+                                <div class="item-info">
+                                    <span class="item-title">Upbeat Energetic ⚡</span>
+                                    <span class="item-artist">动感活力 · 提神</span>
+                                </div>
+                                <span class="item-duration">0:48</span>
+                            </li>
+                            <li class="playlist-item" data-type="local" data-index="2">
+                                <img src="covers/lofi-beat.png" alt="">
+                                <div class="item-info">
+                                    <span class="item-title">Lo-fi Beat 🎧</span>
+                                    <span class="item-artist">低保真 · 学习必备</span>
+                                </div>
+                                <span class="item-duration">0:48</span>
+                            </li>
+                            <li class="playlist-item" data-type="local" data-index="3">
+                                <img src="covers/cinematic.png" alt="">
+                                <div class="item-info">
+                                    <span class="item-title">Cinematic 🎬</span>
+                                    <span class="item-artist">电影感 · 恢宏</span>
+                                </div>
+                                <span class="item-duration">1:00</span>
+                            </li>
+                            <li class="playlist-item" data-type="local" data-index="4">
+                                <img src="covers/synthwave.png" alt="">
+                                <div class="item-info">
+                                    <span class="item-title">Synthwave 🕹️</span>
+                                    <span class="item-artist">复古合成器 · 霓虹</span>
+                                </div>
+                                <span class="item-duration">0:50</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="playlist tab-ptab" id="tabOnline" style="display:none">
+                        <div class="loading" id="searchLoading" style="display:none"><span class="spinner"></span> 搜索中...</div>
+                        <div class="empty-hint" id="searchEmpty">输入歌名开始搜索 🔍<br><small>例如：周杰伦、晴天、孤勇者</small></div>
+                        <ul id="searchResults"></ul>
+                    </div>
+
+                    <div class="progress-section">
+                        <span class="time" id="currentTime">0:00</span>
+                        <div class="progress-bar" id="progressBar">
+                            <div class="progress-fill" id="progressFill"></div>
+                            <div class="progress-thumb" id="progressThumb"></div>
+                        </div>
+                        <span class="time" id="totalTime">0:00</span>
+                    </div>
+
+                    <div class="player-controls">
+                        <button class="ctrl-btn" id="shuffleBtn" title="随机播放">🔀</button>
+                        <button class="ctrl-btn" id="prevBtn" title="上一首">⏮</button>
+                        <button class="ctrl-btn play-btn" id="playBtn" title="播放/暂停">▶</button>
+                        <button class="ctrl-btn" id="nextBtn" title="下一首">⏭</button>
+                        <button class="ctrl-btn" id="loopBtn" title="循环模式">🔁</button>
+                        <button class="ctrl-btn" id="favBtn" title="收藏">♡</button>
+                    </div>
+
+                    <div class="volume-section">
+                        <span class="volume-icon" id="volumeIcon">🔊</span>
+                        <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="70">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== 发现页：音乐分类 ====== -->
+        <div class="page" id="pageDiscover">
+            <h2 class="page-title">🎵 发现音乐</h2>
+            <div class="cat-tags" id="catTags">
+                <!-- 动态生成 -->
+            </div>
+            <div class="loading" id="discoverLoading" style="display:none"><span class="spinner"></span> 加载中...</div>
+            <div class="playlist-grid" id="playlistGrid">
+                <!-- 动态生成 -->
+            </div>
+            <!-- 歌单详情 -->
+            <div class="playlist-detail" id="playlistDetail" style="display:none">
+                <button class="btn-back" id="backToDiscover">← 返回</button>
+                <div class="playlist-detail-header" id="playlistDetailHeader"></div>
+                <ul class="song-list" id="playlistSongs"></ul>
+            </div>
+        </div>
+
+        <!-- ====== 收藏页 ====== -->
+        <div class="page" id="pageFavorites">
+            <h2 class="page-title">❤️ 我的收藏</h2>
+            <div class="loading" id="favLoading" style="display:none"><span class="spinner"></span> 加载中...</div>
+            <div class="empty-hint" id="favEmpty" style="display:none">还没有收藏歌曲<br><small>去搜索或发现页听听歌吧</small></div>
+            <ul class="fav-list" id="favList"></ul>
+        </div>
+
+        <!-- ====== 后台管理页 ====== -->
+        <div class="page" id="pageAdmin">
+            <h2 class="page-title">📊 后台管理</h2>
+            <div class="stats-cards" id="statsCards"></div>
+            <div class="table-wrapper">
+                <table class="user-table">
+                    <thead>
+                        <tr><th>ID</th><th>用户名</th><th>注册时间</th><th>收藏数</th></tr>
+                    </thead>
+                    <tbody id="userTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部播放栏 -->
+    <div class="bottom-player" id="bottomPlayer">
+        <div class="bp-progress" id="bpProgress">
+            <div class="bp-progress-fill" id="bpProgressFill"></div>
+        </div>
+        <img class="bp-cover" id="bpCover" src="covers/chill-ambient.png" alt="">
+        <div class="bp-info">
+            <div class="bp-title" id="bpTitle">Chill Ambient</div>
+            <div class="bp-artist" id="bpArtist">Night FM</div>
+        </div>
+        <div class="bp-controls">
+            <button class="bp-btn" id="bpPrev" title="上一首">⏮</button>
+            <button class="bp-btn bp-btn-play" id="bpPlay" title="播放/暂停">▶</button>
+            <button class="bp-btn" id="bpNext" title="下一首">⏭</button>
+        </div>
+        <input type="range" class="volume-slider bp-volume" id="bpVolume" min="0" max="100" value="70">
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

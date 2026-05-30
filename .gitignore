@@ -1,0 +1,8 @@
+node_modules/
+*.db
+*.db-shm
+*.db-wal
+ncm_cookie.txt
+ncm-api/node_modules/
+ncm-api/data.db*
+*.py
