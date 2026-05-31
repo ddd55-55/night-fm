@@ -18,9 +18,9 @@ const localTracks = [
 const CATEGORIES = ['华语', '欧美', '日语', '韩语', '粤语', '电子', '摇滚', '民谣', 'R&B', '说唱', '轻音乐', '影视原声'];
 
 // ====== Global State ======
+let authToken = localStorage.getItem('nfm_token') || null;
 let currentUser = null;  // { id, username }
-let currentMode = 'local';
-let localIndex = 0;
+let currentMode = 'online';
 let currentTrack = null;
 let isPlaying = false;
 let shuffle = false;
@@ -28,7 +28,22 @@ let loopMode = 0;
 let audio = null;
 let searchTimeout = null;
 let currentFavId = null;  // current playing song's NCM id for fav check
+let isCurrentFav = false; // track fav state with variable, not emoji
 let lyricData = [];  // [{time: seconds, text: string}]
+let onlineSearchResults = []; // [{ncmId, cover, title, artist, duration}] for prev/next
+let onlineIndex = -1;        // current position in online results
+
+// ====== Auth-aware fetch wrapper ======
+async function apiFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+  if (options.body && typeof options.body === 'string') {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+  return fetch(url, { ...options, headers });
+}
 
 // ====== DOM Shortcuts ======
 const $ = s => document.querySelector(s);
@@ -53,8 +68,8 @@ function syncBpProgress(pct) {
 
 // Bottom player controls
 $('#bpPlay').addEventListener('click', togglePlay);
-$('#bpPrev').addEventListener('click', () => { if (currentMode === 'local') prevLocalTrack(); else if (audio) audio.currentTime = 0; });
-$('#bpNext').addEventListener('click', () => { if (currentMode === 'local') nextLocalTrack(); });
+$('#bpPrev').addEventListener('click', () => prevOnlineTrack());
+$('#bpNext').addEventListener('click', () => nextOnlineTrack());
 $('#bpVolume').addEventListener('input', () => {
     $('#volumeSlider').value = $('#bpVolume').value;
     if (audio) audio.volume = $('#bpVolume').value / 100;
@@ -130,10 +145,12 @@ function hideAuth() {
 $('#loginBtn').addEventListener('click', () => showAuth('login'));
 $('#logoutBtn').addEventListener('click', () => {
     currentUser = null;
+    authToken = null;
+    localStorage.removeItem('nfm_token');
+    isCurrentFav = false;
     updateUserUI();
     // Go to home
     $$('.nav-link')[0].click();
-    alert('已退出登录');
 });
 $('#closeAuth').addEventListener('click', hideAuth);
 $('#authModal').addEventListener('click', e => { if (e.target === $('#authModal')) hideAuth(); });
@@ -161,6 +178,8 @@ $('#authSubmit').addEventListener('click', async () => {
 
         if (data.success) {
             currentUser = data.user;
+            authToken = data.token;
+            localStorage.setItem('nfm_token', authToken);
             updateUserUI();
             hideAuth();
             // Show admin link if admin
@@ -217,14 +236,12 @@ function loadTrack(track) {
     $('#progressThumb').style.left = '0%';
     $('#currentTime').textContent = '0:00';
     $('#totalTime').textContent = track.duration || '--:--';
-    $('#lyricPanel').innerHTML = '<p class="lyric-line">🎵 加载中...</p>';
+    $('#lyricInner').innerHTML = '<p class="lyric-line">🎵 加载中...</p>';
+    $('#lyricDanmaku').classList.remove('has-lyrics');
     lyricData = [];
     currentFavId = track.ncmId || null;
     updateFavBtn();
 
-    if (currentMode === 'local') {
-        $$('.playlist-item[data-type="local"]').forEach((el, i) => el.classList.toggle('active', i === localIndex));
-    }
     if (track.ncmId) fetchLyrics(track.ncmId);
     updateBottomPlayer();
     if (isPlaying) audio.play().catch(() => {});
@@ -247,17 +264,38 @@ function updatePlayState() {
     }
 }
 
+async function restoreSession() {
+    if (!authToken) return;
+    try {
+        const res = await apiFetch(`${API}/auth/me`);
+        const data = await res.json();
+        if (data.success && data.user) {
+            currentUser = data.user;
+            updateUserUI();
+        } else {
+            // Token expired or invalid
+            authToken = null;
+            localStorage.removeItem('nfm_token');
+            currentUser = null;
+        }
+    } catch (e) {
+        // Server not available, keep token for later
+    }
+}
+
 async function updateFavBtn() {
     if (!currentUser || !currentFavId) {
         $('#favBtn').textContent = '♡';
         $('#favBtn').classList.remove('active');
+        isCurrentFav = false;
         return;
     }
     try {
-        const res = await fetch(`${API}/favorites/check/${currentFavId}?userId=${currentUser.id}`);
+        const res = await apiFetch(`${API}/favorites/check/${currentFavId}`);
         const data = await res.json();
-        $('#favBtn').textContent = data.isFav ? '❤️' : '♡';
-        if (data.isFav) $('#favBtn').classList.add('active');
+        isCurrentFav = data.isFav;
+        $('#favBtn').textContent = isCurrentFav ? '❤️' : '♡';
+        if (isCurrentFav) $('#favBtn').classList.add('active');
         else $('#favBtn').classList.remove('active');
     } catch (e) { /* ignore */ }
 }
@@ -266,16 +304,13 @@ $('#favBtn').addEventListener('click', async () => {
     if (!currentUser) { showAuth('登录'); return; }
     if (!currentFavId || !currentTrack) return;
 
-    const isFav = $('#favBtn').textContent === '❤️';
     try {
-        if (isFav) {
-            await fetch(`${API}/favorites/song/${currentFavId}?userId=${currentUser.id}`, { method: 'DELETE' });
+        if (isCurrentFav) {
+            await apiFetch(`${API}/favorites/song/${currentFavId}`, { method: 'DELETE' });
         } else {
-            await fetch(`${API}/favorites`, {
+            await apiFetch(`${API}/favorites`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    userId: currentUser.id,
                     song: {
                         id: currentFavId,
                         name: currentTrack.title,
@@ -291,8 +326,7 @@ $('#favBtn').addEventListener('click', async () => {
 });
 
 function nextLocalTrack() {
-    let next = shuffle ? Math.floor(Math.random() * localTracks.length) : (localIndex + 1) % localTracks.length;
-    if (shuffle && localTracks.length > 1 && next === localIndex) next = (next + 1) % localTracks.length;
+    let next = shuffle ? nextShuffleIndex(localIndex, localTracks.length) : (localIndex + 1) % localTracks.length;
     localIndex = next;
     loadTrack(localTracks[next]);
     if (isPlaying && audio) audio.play().catch(() => {});
@@ -300,11 +334,63 @@ function nextLocalTrack() {
 
 function prevLocalTrack() {
     if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
-    let prev = shuffle ? Math.floor(Math.random() * localTracks.length) : (localIndex - 1 + localTracks.length) % localTracks.length;
-    if (shuffle && localTracks.length > 1 && prev === localIndex) prev = (prev + 1) % localTracks.length;
+    let prev = shuffle ? nextShuffleIndex(localIndex, localTracks.length) : (localIndex - 1 + localTracks.length) % localTracks.length;
     localIndex = prev;
     loadTrack(localTracks[prev]);
     if (isPlaying && audio) audio.play().catch(() => {});
+}
+
+function nextShuffleIndex(current, total) {
+    if (total <= 1) return 0;
+    // Fisher-Yates style: pick random index different from current when possible
+    const pool = Array.from({ length: total }, (_, i) => i).filter(i => i !== current);
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
+async function nextOnlineTrack() {
+    if (onlineSearchResults.length === 0) return;
+    let next;
+    if (shuffle) {
+        next = nextShuffleIndex(onlineIndex, onlineSearchResults.length);
+    } else {
+        next = (onlineIndex + 1) % onlineSearchResults.length;
+    }
+    onlineIndex = next;
+    const r = onlineSearchResults[next];
+    await playOnlineResult(r);
+}
+
+async function prevOnlineTrack() {
+    if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
+    if (onlineSearchResults.length === 0) return;
+    let prev;
+    if (shuffle) {
+        prev = nextShuffleIndex(onlineIndex, onlineSearchResults.length);
+    } else {
+        prev = (onlineIndex - 1 + onlineSearchResults.length) % onlineSearchResults.length;
+    }
+    onlineIndex = prev;
+    const r = onlineSearchResults[prev];
+    await playOnlineResult(r);
+}
+
+async function playOnlineResult(r) {
+    hideSearchDropdown();
+    currentMode = 'online';
+    isPlaying = true;
+    const track = { title: r.title, artist: r.artist, cover: safeCover(r.cover), src: '', duration: r.duration, ncmId: r.ncmId };
+
+    // Fetch stream URL
+    try {
+        const res = await fetch(`${API}/song/url?id=${r.ncmId}&level=standard`);
+        const data = await res.json();
+        if (data.code === 200 && data.data?.[0]?.url) {
+            track.src = data.data[0].url;
+        }
+    } catch (e) { /* use empty src */ }
+
+    $$('.result-item, .song-item').forEach(el => el.classList.remove('active'));
+    loadTrack(track);
 }
 
 function onTimeUpdate() {
@@ -326,7 +412,7 @@ function onTimeUpdate() {
             }
         }
         // Update highlights
-        const lines = $('#lyricPanel').querySelectorAll('.lyric-line');
+        const lines = $('#lyricDanmaku').querySelectorAll('.lyric-line');
         lines.forEach((line, i) => {
             if (i === activeIdx) {
                 line.classList.add('active');
@@ -340,9 +426,15 @@ function onTimeUpdate() {
 }
 function onLoaded() { if (audio) $('#totalTime').textContent = formatTime(audio.duration); }
 function onEnded() {
-    if (loopMode === 2) { audio.currentTime = 0; audio.play().catch(() => {}); }
-    else if (currentMode === 'local') { if (loopMode === 1 || localIndex < localTracks.length - 1) nextLocalTrack(); else updatePlayState(); }
-    else { if (loopMode >= 1) { audio.currentTime = 0; audio.play().catch(() => {}); } else updatePlayState(); }
+    if (loopMode === 2) {
+        // 单曲循环：重播当前
+        audio.currentTime = 0; audio.play().catch(() => {});
+    } else if (onlineSearchResults.length > 0) {
+        // 列表循环或无循环：播下一首
+        nextOnlineTrack();
+    } else {
+        updatePlayState();
+    }
 }
 
 function toggleShuffle() { shuffle = !shuffle; $('#shuffleBtn').classList.toggle('active', shuffle); }
@@ -355,29 +447,9 @@ function toggleLoop() {
     else { el.textContent = '🔂'; el.classList.add('active'); }
 }
 
-// ====== Player Tab Switching ======
-$$('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        const target = tab.dataset.ptab;
-        $$('.tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        if (target === 'local') {
-            currentMode = 'local';
-            $('#tabLocal').style.display = '';
-            $('#tabOnline').style.display = 'none';
-            $('#searchBar').style.display = 'none';
-        } else {
-            currentMode = 'online';
-            $('#tabLocal').style.display = 'none';
-            $('#tabOnline').style.display = '';
-            $('#searchBar').style.display = 'flex';
-            $('#searchInput').focus();
-        }
-    });
-});
-
 // ====== Search ======
 async function searchNCM(keywords) {
+    $('#searchDropdown').style.display = 'block';
     $('#searchLoading').style.display = 'block';
     $('#searchEmpty').style.display = 'none';
     $('#searchResults').innerHTML = '';
@@ -393,7 +465,18 @@ async function searchNCM(keywords) {
             return;
         }
 
-        $('#searchResults').innerHTML = data.result.songs.filter(s => s && s.id).map(song => {
+        // Build onlineSearchResults for prev/next navigation
+        onlineSearchResults = data.result.songs.filter(s => s && s.id).map(song => ({
+            ncmId: song.id,
+            cover: song.al?.picUrl || '',
+            title: song.name || '未知',
+            artist: (song.ar && song.ar.length) ? song.ar.map(a => a.name || '?').join('/') : '未知',
+            duration: song.dt ? formatTime(song.dt / 1000) : '--:--',
+            isFree: (song.fee === 0 || song.fee === 8),
+        }));
+        onlineIndex = -1;
+
+        $('#searchResults').innerHTML = data.result.songs.filter(s => s && s.id).map((song, idx) => {
             const name = song.name || '未知';
             const artists = (song.ar && song.ar.length) ? song.ar.map(a => a.name || '?').join('/') : '未知';
             const album = song.al?.name || '';
@@ -417,16 +500,46 @@ async function searchNCM(keywords) {
 $('#searchInput').addEventListener('input', () => {
     clearTimeout(searchTimeout);
     const kw = $('#searchInput').value.trim();
-    if (!kw) { $('#searchResults').innerHTML = ''; $('#searchEmpty').style.display = 'block'; return; }
+    if (!kw) {
+        $('#searchResults').innerHTML = '';
+        $('#searchDropdown').style.display = 'none';
+        return;
+    }
     searchTimeout = setTimeout(() => searchNCM(kw), 400);
+});
+$('#searchInput').addEventListener('focus', () => {
+    const kw = $('#searchInput').value.trim();
+    if (!kw) {
+        // Show empty hint when focused with no input
+        $('#searchResults').innerHTML = '';
+        $('#searchEmpty').innerHTML = '输入歌名开始搜索 🔍<br><small>例如：周杰伦、晴天、孤勇者</small>';
+        $('#searchEmpty').style.display = 'block';
+        $('#searchLoading').style.display = 'none';
+        $('#searchDropdown').style.display = 'block';
+    }
 });
 $('#searchBtn').addEventListener('click', () => { const kw = $('#searchInput').value.trim(); if (kw) searchNCM(kw); });
 $('#searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') { const kw = $('#searchInput').value.trim(); if (kw) searchNCM(kw); } });
 
+function hideSearchDropdown() {
+    $('#searchDropdown').style.display = 'none';
+    // Clear input focus to collapse mobile keyboard
+    $('#searchInput').blur();
+}
+
 $('#searchResults').addEventListener('click', async e => {
     const item = e.target.closest('.result-item');
     if (!item) return;
+    hideSearchDropdown();
     await playNCMItem(item);
+});
+
+// Click outside to close dropdown
+document.addEventListener('click', e => {
+    if (!$('#searchDropdown') || $('#searchDropdown').style.display === 'none') return;
+    if (!e.target.closest('#searchSection')) {
+        hideSearchDropdown();
+    }
 });
 
 async function playNCMItem(item) {
@@ -436,17 +549,26 @@ async function playNCMItem(item) {
     const artist = item.dataset.artist || '未知';
     const duration = item.dataset.duration || '--:--';
 
+    // Find index in onlineSearchResults for prev/next navigation
+    const nid = parseInt(ncmId);
+    onlineIndex = onlineSearchResults.findIndex(r => r.ncmId === nid);
+    if (onlineIndex < 0 && onlineSearchResults.length > 0) {
+        // If not found (e.g., from playlist/favorites), build temp list
+        onlineSearchResults = [{ ncmId: nid, cover, title, artist, duration, isFree: true }];
+        onlineIndex = 0;
+    }
+
     $('#trackTitle').textContent = title;
     $('#trackArtist').textContent = artist;
     $('#coverImg').src = safeCover(cover);
     $('#totalTime').textContent = duration;
-    $('#lyricPanel').innerHTML = '<p class="lyric-line">🎵 正在获取播放链接...</p>';
+    $('#lyricInner').innerHTML = '<p class="lyric-line">🎵 正在获取播放链接...</p>';
 
     try {
         const res = await fetch(`${API}/song/url?id=${ncmId}&level=standard`);
         const data = await res.json();
         if (data.code !== 200 || !data.data?.[0]?.url) {
-            $('#lyricPanel').innerHTML = '<p class="lyric-line">⚠️ 这首歌可能需要 VIP 或暂无资源</p>';
+            $('#lyricInner').innerHTML = '<p class="lyric-line">⚠️ 这首歌可能需要 VIP 或暂无资源</p>';
             return;
         }
         const track = { title, artist, cover: safeCover(cover), src: data.data[0].url, duration, ncmId: parseInt(ncmId) };
@@ -456,7 +578,7 @@ async function playNCMItem(item) {
         isPlaying = true;
         loadTrack(track);
     } catch (e) {
-        $('#lyricPanel').innerHTML = '<p class="lyric-line">⚠️ 获取播放链接失败</p>';
+        $('#lyricInner').innerHTML = '<p class="lyric-line">⚠️ 获取播放链接失败</p>';
     }
 }
 
@@ -488,29 +610,27 @@ async function fetchLyrics(ncmId) {
         if (data.code === 200 && data.lrc?.lyric) {
             lyricData = parseLRC(data.lrc.lyric);
             if (lyricData.length > 0) {
-                $('#lyricPanel').innerHTML = lyricData.map(l =>
+                $('#lyricInner').innerHTML = lyricData.map(l =>
                     `<p class="lyric-line" data-time="${l.time}">${l.text}</p>`
                 ).join('');
+                $('#lyricDanmaku').classList.add('has-lyrics');
+                // 歌词加载后显示开头几句（前奏期间不会空白）
+                requestAnimationFrame(() => {
+                    $('#lyricDanmaku').scrollTop = 0;
+                });
             } else {
-                $('#lyricPanel').innerHTML = '<p class="lyric-line">🎵 纯音乐 — 享受旋律吧</p>';
+                $('#lyricInner').innerHTML = '<p class="lyric-line">🎵 纯音乐 — 享受旋律吧</p>';
+                $('#lyricDanmaku').classList.remove('has-lyrics');
             }
         } else {
-            $('#lyricPanel').innerHTML = '<p class="lyric-line">🎵 暂无歌词</p>';
+            $('#lyricInner').innerHTML = '<p class="lyric-line">🎵 暂无歌词</p>';
+            $('#lyricDanmaku').classList.remove('has-lyrics');
         }
     } catch (e) {
-        $('#lyricPanel').innerHTML = '<p class="lyric-line">🎵 —</p>';
+        $('#lyricInner').innerHTML = '<p class="lyric-line">🎵 —</p>';
+        $('#lyricDanmaku').classList.remove('has-lyrics');
     }
 }
-
-// Local playlist click
-$('#localPlaylist').addEventListener('click', e => {
-    const item = e.target.closest('.playlist-item');
-    if (!item) return;
-    const index = +item.dataset.index;
-    if (currentMode === 'local' && index === localIndex) { togglePlay(); return; }
-    currentMode = 'local'; isPlaying = true; localIndex = index;
-    loadTrack(localTracks[index]);
-});
 
 // ====== Discovery Page ======
 async function loadCategories(cat) {
@@ -581,6 +701,17 @@ $('#playlistGrid').addEventListener('click', async e => {
         }
 
         const pl = data.playlist;
+
+        // Store songs for online navigation
+        onlineSearchResults = pl.tracks.filter(t => t && t.id).map(t => ({
+            ncmId: t.id,
+            cover: t.al?.picUrl || '',
+            title: t.name || '未知',
+            artist: (t.ar && t.ar.length) ? t.ar.map(a => a.name || '?').join('/') : '未知',
+            duration: t.dt ? formatTime(t.dt / 1000) : '--:--',
+            isFree: true,
+        }));
+
         $('#playlistDetailHeader').innerHTML = `
             <img src="${plCover || svgCover()}" onerror="this.src='${svgCover()}'">
             <div class="detail-info"><h3>${plName}</h3><p>${pl.trackCount || 0} 首 · ${pl.creator?.nickname || ''}</p></div>
@@ -623,10 +754,9 @@ $('#playlistSongs').addEventListener('click', async e => {
         if (!currentUser) { showAuth('登录'); return; }
         const song = { id: +favStar.dataset.ncmId, name: favStar.dataset.name, artist: favStar.dataset.artist, cover: favStar.dataset.cover, duration: favStar.dataset.dur };
         try {
-            const res = await fetch(`${API}/favorites`, {
+            const res = await apiFetch(`${API}/favorites`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: currentUser.id, song }),
+                body: JSON.stringify({ song }),
             });
             const data = await res.json();
             favStar.textContent = data.success ? '❤️' : '♡';
@@ -647,7 +777,7 @@ async function loadFavorites() {
     $('#favEmpty').style.display = 'none';
 
     try {
-        const res = await fetch(`${API}/favorites?userId=${currentUser.id}`);
+        const res = await apiFetch(`${API}/favorites`);
         const data = await res.json();
         $('#favLoading').style.display = 'none';
 
@@ -655,6 +785,16 @@ async function loadFavorites() {
             $('#favEmpty').style.display = 'block';
             return;
         }
+
+        // Store for online navigation
+        onlineSearchResults = data.data.map(f => ({
+            ncmId: f.song_id,
+            cover: f.cover_url || '',
+            title: f.song_name,
+            artist: f.artist,
+            duration: f.duration || '--:--',
+            isFree: true,
+        }));
 
         $('#favList').innerHTML = data.data.map(f => `
             <li class="song-item" data-ncm-id="${f.song_id}" data-free="true"
@@ -678,7 +818,7 @@ $('#favList').addEventListener('click', async e => {
     const removeBtn = e.target.closest('.remove-fav');
     if (removeBtn) {
         const favId = removeBtn.dataset.favId;
-        await fetch(`${API}/favorites/${favId}?userId=${currentUser.id}`, { method: 'DELETE' });
+        await apiFetch(`${API}/favorites/${favId}`, { method: 'DELETE' });
         loadFavorites();
         return;
     }
@@ -691,7 +831,7 @@ $('#favList').addEventListener('click', async e => {
 async function loadAdmin() {
     if (!currentUser || currentUser.username !== 'admin') return;
     try {
-        const res = await fetch(`${API}/admin/users`);
+        const res = await apiFetch(`${API}/admin/users`);
         const data = await res.json();
         if (!data.success) return;
 
@@ -723,8 +863,8 @@ $('#volumeIcon').addEventListener('click', () => {
 });
 
 $('#playBtn').addEventListener('click', togglePlay);
-$('#prevBtn').addEventListener('click', () => { if (currentMode === 'local') prevLocalTrack(); else if (audio) audio.currentTime = 0; });
-$('#nextBtn').addEventListener('click', () => { if (currentMode === 'local') nextLocalTrack(); });
+$('#prevBtn').addEventListener('click', () => prevOnlineTrack());
+$('#nextBtn').addEventListener('click', () => nextOnlineTrack());
 $('#shuffleBtn').addEventListener('click', toggleShuffle);
 $('#loopBtn').addEventListener('click', toggleLoop);
 
@@ -733,8 +873,8 @@ document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     switch (e.code) {
         case 'Space': e.preventDefault(); togglePlay(); break;
-        case 'ArrowLeft': e.preventDefault(); if (currentMode === 'local') prevLocalTrack(); else if (audio) audio.currentTime = Math.max(0, audio.currentTime - 5); break;
-        case 'ArrowRight': e.preventDefault(); if (currentMode === 'local') nextLocalTrack(); else if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5); break;
+        case 'ArrowLeft': e.preventDefault(); prevOnlineTrack(); break;
+        case 'ArrowRight': e.preventDefault(); nextOnlineTrack(); break;
         case 'ArrowUp': e.preventDefault(); $('#volumeSlider').value = Math.min(100, +$('#volumeSlider').value + 5); $('#volumeSlider').dispatchEvent(new Event('input')); break;
         case 'ArrowDown': e.preventDefault(); $('#volumeSlider').value = Math.max(0, +$('#volumeSlider').value - 5); $('#volumeSlider').dispatchEvent(new Event('input')); break;
         case 'KeyS': toggleShuffle(); break;
@@ -758,13 +898,13 @@ function createParticles() {
 }
 
 // ====== Init ======
-function init() {
+async function init() {
     createParticles();
-    currentTrack = localTracks[0];
-    loadTrack(currentTrack);
+    await restoreSession();
     updateUserUI();
-    audio.play().then(() => updatePlayState()).catch(() => updatePlayState());
     updateBottomPlayer();
+    // Focus search input so user can start searching immediately
+    setTimeout(() => $('#searchInput').focus(), 300);
 }
 
 // Audio state tracking

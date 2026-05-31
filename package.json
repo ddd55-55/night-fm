@@ -8,6 +8,12 @@
   "dependencies": {
     "@vercel/kv": "^1.0.0",
     "bcryptjs": "^3.0.3",
-    "NeteaseCloudMusicApi": "^4.32.0"
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "NeteaseCloudMusicApi": "^4.32.0",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.34.5"
   }
 }
